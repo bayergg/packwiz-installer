@@ -9,6 +9,7 @@ import link.infra.packwiz.installer.ui.cli.CLIHandler
 import link.infra.packwiz.installer.ui.gui.GUIHandler
 import link.infra.packwiz.installer.ui.wrap
 import link.infra.packwiz.installer.util.Log
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okio.Path.Companion.toOkioPath
 import okio.Path.Companion.toPath
@@ -106,10 +107,23 @@ class Main(args: Array<String>) {
 		val timeout = ui.wrap("Invalid timeout value") {
 			cmd.getOptionValue("timeout")?.toLong() ?: 10
 		}
+		val distroTemplateFile = cmd.getOptionValue("distro-template")?.let {
+			PackwizFilePath(
+				it.toPath().parent ?: ui.showErrorAndExit("Invalid pack file path: $packFileRaw"),
+				it.toPath().name
+			)
+		}
+		val distroFile = ui.wrap("Invalid distro file path") {
+			packFolder / (cmd.getOptionValue("distro-file") ?: "distro.json")
+		}
+		val distroBaseUrl = cmd.getOptionValue("distro-base-url")?.let {
+			ui.wrap("Invalid distro base URL") { HttpUrlPath(it.toHttpUrl()) }
+		}
 
 		// Start update process!
 		try {
-			UpdateManager(UpdateManager.Options(packFile, manifestFile, packFolder, multimcFolder, side, timeout), ui)
+			UpdateManager(UpdateManager.Options(packFile, manifestFile, packFolder, multimcFolder, side, timeout,
+				distroTemplateFile, distroFile, distroBaseUrl), ui)
 		} catch (e: Exception) {
 			ui.showErrorAndExit("Update process failed", e)
 		}
@@ -127,6 +141,9 @@ class Main(args: Array<String>) {
 			options.addOption(null, "multimc-folder", true, "The MultiMC pack folder (defaults to the parent of the pack directory)")
 			options.addOption(null, "meta-file", true, "JSON file to store pack metadata, relative to the pack folder (defaults to packwiz.json)")
 			options.addOption("t", "timeout", true, "Seconds to wait before automatically launching when asking about optional mods (defaults to 10)")
+			options.addOption(null, "distro-template", true, "JSON file to use as a template for the packwiz-generated distro file")
+			options.addOption(null, "distro-file", true, "JSON file to store the packwiz-generated distro file, relative to the pack folder (defaults to distro.json)")
+			options.addOption(null, "distro-base-url", true, "Base URL which distro module paths will be concatenated to")
 		}
 
 		// TODO: link these somehow so they're only defined once?

@@ -44,7 +44,7 @@ dependencies {
 }
 
 application {
-	mainClass.set("link.infra.packwiz.installer.RequiresBootstrap")
+	mainClass.set("link.infra.packwiz.installer.MainKt")
 }
 
 val gitVersion: groovy.lang.Closure<*> by extra
@@ -52,7 +52,7 @@ version = gitVersion()
 
 tasks.jar {
 	manifest {
-		attributes["Main-Class"] = "link.infra.packwiz.installer.RequiresBootstrap"
+		attributes["Main-Class"] = "link.infra.packwiz.installer.MainKt"
 		attributes["Implementation-Version"] = project.version
 	}
 }

@@ -5,16 +5,14 @@ import com.google.gson.GsonBuilder
 import com.google.gson.JsonIOException
 import com.google.gson.JsonSyntaxException
 import link.infra.packwiz.installer.DownloadTask.Companion.createTasksFromIndex
-import link.infra.packwiz.installer.metadata.DownloadMode
-import link.infra.packwiz.installer.metadata.IndexFile
-import link.infra.packwiz.installer.metadata.ManifestFile
-import link.infra.packwiz.installer.metadata.PackFile
+import link.infra.packwiz.installer.metadata.*
 import link.infra.packwiz.installer.metadata.curseforge.resolveCfMetadata
 import link.infra.packwiz.installer.metadata.hash.Hash
 import link.infra.packwiz.installer.metadata.hash.HashFormat
 import link.infra.packwiz.installer.request.RequestException
 import link.infra.packwiz.installer.target.ClientHolder
 import link.infra.packwiz.installer.target.Side
+import link.infra.packwiz.installer.target.path.HttpUrlPath
 import link.infra.packwiz.installer.target.path.PackwizFilePath
 import link.infra.packwiz.installer.target.path.PackwizPath
 import link.infra.packwiz.installer.ui.IUserInterface
@@ -22,6 +20,9 @@ import link.infra.packwiz.installer.ui.IUserInterface.CancellationResult
 import link.infra.packwiz.installer.ui.IUserInterface.ExceptionListResult
 import link.infra.packwiz.installer.ui.data.InstallProgress
 import link.infra.packwiz.installer.util.Log
+import okhttp3.HttpUrl
+import okio.Path.Companion.toPath
+import okio.Source
 import okio.buffer
 import java.io.IOException
 import java.io.InputStreamReader
@@ -49,6 +50,9 @@ class UpdateManager internal constructor(private val opts: Options, val ui: IUse
 		val multimcFolder: PackwizFilePath,
 		val side: Side,
 		val timeout: Long,
+		val distroTemplateFile: PackwizFilePath?,
+		val distroFile: PackwizFilePath?,
+		val distroBaseUrl: HttpUrlPath?,
 	)
 
 	// TODO: make this return a value based on results?
@@ -58,12 +62,23 @@ class UpdateManager internal constructor(private val opts: Options, val ui: IUse
 			clientHolder.close()
 		}
 
-		ui.submitProgress(InstallProgress("Loading manifest file..."))
 		val gson = GsonBuilder()
 			.registerTypeAdapter(Hash::class.java, Hash.TypeHandler())
 			.registerTypeAdapter(PackwizFilePath::class.java, PackwizPath.adapterRelativeTo(opts.packFolder))
 			.enableComplexMapKeySerialization()
 			.create()
+
+		ui.submitProgress(InstallProgress("Loading distro template file..."))
+		val distro = opts.distroTemplateFile?.let {
+			try {
+				InputStreamReader(it.source(clientHolder).inputStream(), StandardCharsets.UTF_8)
+					.use { reader -> gson.fromJson(reader, DistroFile::class.java) }
+			} catch (e: IOException) {
+				ui.showErrorAndExit("Failed to read distro template file, verify ${opts.distroTemplateFile}", e)
+			}
+		}?.apply { servers[0].modules = mutableListOf() }
+
+		ui.submitProgress(InstallProgress("Loading manifest file..."))
 		val manifest = try {
 			// TODO: kotlinx.serialisation?
 			InputStreamReader(opts.manifestFile.source(clientHolder).inputStream(), StandardCharsets.UTF_8).use { reader ->
@@ -128,7 +143,7 @@ class UpdateManager internal constructor(private val opts: Options, val ui: IUse
 		ui.submitProgress(InstallProgress("Checking local files..."))
 
 		// If the side changes, invalidate EVERYTHING (even when the index hasn't changed)
-		val invalidateAll = opts.side != manifest.cachedSide
+		val invalidateAll = opts.side != manifest.cachedSide || distro != null
 		val invalidatedUris: MutableList<PackwizFilePath> = ArrayList()
 		if (!invalidateAll) {
 			// Invalidation checking must be done here, as it must happen before pack/index hashes are checked
@@ -182,7 +197,8 @@ class UpdateManager internal constructor(private val opts: Options, val ui: IUse
 				manifest,
 				invalidatedUris,
 				invalidateAll,
-				clientHolder
+				clientHolder,
+				distro,
 			)
 		} catch (e1: Exception) {
 			ui.showErrorAndExit("Failed to process index file", e1)
@@ -205,9 +221,27 @@ class UpdateManager internal constructor(private val opts: Options, val ui: IUse
 		} catch (e: IOException) {
 			ui.showErrorAndExit("Failed to save local manifest file", e)
 		}
+
+		opts.distroFile?.let {
+			try {
+				Files.newBufferedWriter(it.nioPath, StandardCharsets.UTF_8)
+					.use { writer -> gson.newBuilder().setPrettyPrinting().create().toJson(distro, writer) }
+			} catch (e: IOException) {
+				ui.showErrorAndExit("Failed to save local distro file", e)
+			}
+		}
 	}
 
-	private fun processIndex(indexUri: PackwizPath<*>, indexHash: Hash<*>, hashFormat: HashFormat<*>, manifest: ManifestFile, invalidatedFiles: List<PackwizFilePath>, invalidateAll: Boolean, clientHolder: ClientHolder) {
+	private fun processIndex(
+		indexUri: PackwizPath<*>,
+		indexHash: Hash<*>,
+		hashFormat: HashFormat<*>,
+		manifest: ManifestFile,
+		invalidatedFiles: List<PackwizFilePath>,
+		invalidateAll: Boolean,
+		clientHolder: ClientHolder,
+		distro: DistroFile?,
+	) {
 		if (!invalidateAll) {
 			if (manifest.indexFileHash == indexHash && invalidatedFiles.isEmpty()) {
 				ui.submitProgress(InstallProgress("Modpack files are already up to date!", 1, 1))
@@ -383,6 +417,28 @@ class UpdateManager internal constructor(private val opts: Options, val ui: IUse
 				}
 			}
 
+			// Update distro
+			if (distro != null && task.correctSide()) {
+				val path = (task.metadata.linkedFile?.filename ?: task.metadata.file).rebase(PackwizFilePath("".toPath()))
+				distro.servers[0].modules!!.add(
+					DistroFile.Server.Module(
+						id = path.filename,
+						name = task.metadata.name,
+						type = DistroFile.Server.Module.ModuleType.FILE,
+						classpath = null,
+						artifact = DistroFile.Server.Module.Artifact(
+							size = Files.size(path.rebase(opts.packFolder).nioPath).toInt(),
+							url = (opts.distroBaseUrl!! / path.toString()).toString(),
+							MD5 = HashFormat.MD5.source(path.source(clientHolder)).use { hashingSource ->
+								hashingSource.buffer().readByteString()
+								hashingSource.hash.value.hex()
+							},
+							path = path.toString().replace('\\', '/')
+						),
+                    subModules = null,
+                ))
+			}
+
 			val exDetails = task.exceptionDetails
 			val progress = if (exDetails != null) {
 				"Failed to download ${exDetails.name}: ${exDetails.exception.message}"
@@ -481,6 +537,14 @@ class UpdateManager internal constructor(private val opts: Options, val ui: IUse
 		} else if (cancelledStartGame) {
 			println("Update cancelled by user! Continuing to start game...")
 			exitProcess(0)
+		}
+	}
+
+	fun getFileHash(source: Source): String {
+		HashFormat.MD5.source(source).use { hashingSource ->
+			// Buffer the source and consume it to force hashing
+			hashingSource.buffer().readByteString()
+			return hashingSource.hash.value.hex()
 		}
 	}
 
