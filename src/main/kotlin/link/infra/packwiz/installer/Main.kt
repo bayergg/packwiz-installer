@@ -25,163 +25,229 @@ import javax.swing.UIManager
 import kotlin.system.exitProcess
 
 @Suppress("unused")
-class Main(args: Array<String>) {
-	// Don't attempt to start a GUI if we are headless
-	private var guiEnabled = !GraphicsEnvironment.isHeadless()
+class Main(
+    args: Array<String>,
+) {
+    // Don't attempt to start a GUI if we are headless
+    private var guiEnabled = !GraphicsEnvironment.isHeadless()
 
-	private fun startup(args: Array<String>) {
-		val options = Options()
-		addNonBootstrapOptions(options)
-		addBootstrapOptions(options)
+    private fun startup(args: Array<String>) {
+        val options = Options()
+        addNonBootstrapOptions(options)
+        addBootstrapOptions(options)
 
-		val parser = DefaultParser()
-		val cmd = try {
-			parser.parse(options, args)
-		} catch (e: ParseException) {
-			Log.fatal("Failed to parse command line arguments", e)
-			if (guiEnabled) {
-				EventQueue.invokeAndWait {
-					try {
-						UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
-					} catch (ignored: Exception) {
-						// Ignore the exceptions, just continue using the ugly L&F
-					}
-					JOptionPane.showMessageDialog(null, "Failed to parse command line arguments: $e",
-						"packwiz-installer", JOptionPane.ERROR_MESSAGE)
-				}
-			}
-			exitProcess(1)
-		}
+        val parser = DefaultParser()
+        val cmd =
+            try {
+                parser.parse(options, args)
+            } catch (e: ParseException) {
+                Log.fatal("Failed to parse command line arguments", e)
+                if (guiEnabled) {
+                    EventQueue.invokeAndWait {
+                        try {
+                            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
+                        } catch (ignored: Exception) {
+                            // Ignore the exceptions, just continue using the ugly L&F
+                        }
+                        JOptionPane.showMessageDialog(
+                            null,
+                            "Failed to parse command line arguments: $e",
+                            "packwiz-installer",
+                            JOptionPane.ERROR_MESSAGE,
+                        )
+                    }
+                }
+                exitProcess(1)
+            }
 
-		if (guiEnabled && cmd.hasOption("no-gui")) {
-			guiEnabled = false
-		}
+        if (guiEnabled && cmd.hasOption("no-gui")) {
+            guiEnabled = false
+        }
 
-		val ui = if (guiEnabled) GUIHandler() else CLIHandler()
+        val ui = if (guiEnabled) GUIHandler() else CLIHandler()
 
-		val unparsedArgs = cmd.args
-		if (unparsedArgs.size > 1) {
-			ui.showErrorAndExit("Too many arguments specified!")
-		} else if (unparsedArgs.isEmpty()) {
-			ui.showErrorAndExit("pack.toml URI to install from must be specified!")
-		}
+        val unparsedArgs = cmd.args
+        if (unparsedArgs.size > 1) {
+            ui.showErrorAndExit("Too many arguments specified!")
+        } else if (unparsedArgs.isEmpty()) {
+            ui.showErrorAndExit("pack.toml URI to install from must be specified!")
+        }
 
-		val title = cmd.getOptionValue("title")
-		if (title != null) {
-			ui.title = title
-		}
+        val title = cmd.getOptionValue("title")
+        if (title != null) {
+            ui.title = title
+        }
 
-		ui.show()
+        ui.show()
 
-		val packFileRaw = unparsedArgs[0]
+        val packFileRaw = unparsedArgs[0]
 
-		val packFile = when {
-			// HTTP(s) URLs
-			Regex("^https?://", RegexOption.IGNORE_CASE).containsMatchIn(packFileRaw) -> ui.wrap("Invalid HTTP/HTTPS URL for pack file: $packFileRaw") {
-				HttpUrlPath(packFileRaw.toHttpUrl().resolve(".")!!, packFileRaw.toHttpUrl().pathSegments.last())
-			}
-			// File URIs (uses same logic as old packwiz-installer, for backwards compat)
-			Regex("^file:", RegexOption.IGNORE_CASE).containsMatchIn(packFileRaw) -> {
-				ui.wrap("Failed to parse file path for pack file: $packFileRaw") {
-					val path = Paths.get(URI(packFileRaw)).toOkioPath()
-					PackwizFilePath(path.parent ?: ui.showErrorAndExit("Invalid pack file path: $packFileRaw"), path.name)
-				}
-			}
-			// Other URIs (unsupported)
-			Regex("^[a-z][a-z\\d+\\-.]*://", RegexOption.IGNORE_CASE).containsMatchIn(packFileRaw) -> ui.showErrorAndExit("Unsupported scheme for pack file: $packFileRaw")
-			// None of the above matches -> interpret as file path
-			else -> PackwizFilePath(packFileRaw.toPath().parent ?: ui.showErrorAndExit("Invalid pack file path: $packFileRaw"), packFileRaw.toPath().name)
-		}
-		val side = cmd.getOptionValue("side")?.let {
-			Side.from(it) ?: ui.showErrorAndExit("Unknown side name: $it")
-		} ?: Side.CLIENT
-		val packFolder = ui.wrap("Invalid pack folder path") {
-			cmd.getOptionValue("pack-folder")?.let{ PackwizFilePath(it.toPath()) } ?: PackwizFilePath(".".toPath())
-		}
-		val multimcFolder = ui.wrap("Invalid MultiMC folder path") {
-			cmd.getOptionValue("multimc-folder")?.let{ PackwizFilePath(it.toPath()) } ?: PackwizFilePath("..".toPath())
-		}
-		val manifestFile = ui.wrap("Invalid manifest file path") {
-			packFolder / (cmd.getOptionValue("meta-file") ?: "packwiz.json")
-		}
-		val timeout = ui.wrap("Invalid timeout value") {
-			cmd.getOptionValue("timeout")?.toLong() ?: 10
-		}
-		val distroTemplateFile = cmd.getOptionValue("distro-template")?.let {
-			PackwizFilePath(
-				it.toPath().parent ?: ui.showErrorAndExit("Invalid pack file path: $packFileRaw"),
-				it.toPath().name
-			)
-		}
-		val distroFile = ui.wrap("Invalid distro file path") {
-			packFolder / (cmd.getOptionValue("distro-file") ?: "distro.json")
-		}
-		val distroBaseUrl = cmd.getOptionValue("distro-base-url")?.let {
-			ui.wrap("Invalid distro base URL") { HttpUrlPath(it.toHttpUrl()) }
-		}
+        val packFile =
+            when {
+                // HTTP(s) URLs
+                Regex("^https?://", RegexOption.IGNORE_CASE).containsMatchIn(packFileRaw) ->
+                    ui.wrap("Invalid HTTP/HTTPS URL for pack file: $packFileRaw") {
+                        HttpUrlPath(packFileRaw.toHttpUrl().resolve(".")!!, packFileRaw.toHttpUrl().pathSegments.last())
+                    }
+                // File URIs (uses same logic as old packwiz-installer, for backwards compat)
+                Regex("^file:", RegexOption.IGNORE_CASE).containsMatchIn(packFileRaw) -> {
+                    ui.wrap("Failed to parse file path for pack file: $packFileRaw") {
+                        val path = Paths.get(URI(packFileRaw)).toOkioPath()
+                        PackwizFilePath(path.parent ?: ui.showErrorAndExit("Invalid pack file path: $packFileRaw"), path.name)
+                    }
+                }
+                // Other URIs (unsupported)
+                Regex(
+                    "^[a-z][a-z\\d+\\-.]*://",
+                    RegexOption.IGNORE_CASE,
+                ).containsMatchIn(packFileRaw) -> ui.showErrorAndExit("Unsupported scheme for pack file: $packFileRaw")
+                // None of the above matches -> interpret as file path
+                else ->
+                    PackwizFilePath(
+                        packFileRaw.toPath().parent ?: ui.showErrorAndExit("Invalid pack file path: $packFileRaw"),
+                        packFileRaw.toPath().name,
+                    )
+            }
+        val side =
+            cmd.getOptionValue("side")?.let {
+                Side.from(it) ?: ui.showErrorAndExit("Unknown side name: $it")
+            } ?: Side.CLIENT
+        val packFolder =
+            ui.wrap("Invalid pack folder path") {
+                cmd.getOptionValue("pack-folder")?.let { PackwizFilePath(it.toPath()) } ?: PackwizFilePath(".".toPath())
+            }
+        val multimcFolder =
+            ui.wrap("Invalid MultiMC folder path") {
+                cmd.getOptionValue("multimc-folder")?.let { PackwizFilePath(it.toPath()) } ?: PackwizFilePath("..".toPath())
+            }
+        val manifestFile =
+            ui.wrap("Invalid manifest file path") {
+                packFolder / (cmd.getOptionValue("meta-file") ?: "packwiz.json")
+            }
+        val timeout =
+            ui.wrap("Invalid timeout value") {
+                cmd.getOptionValue("timeout")?.toLong() ?: 10
+            }
+        val distroTemplateFile =
+            cmd.getOptionValue("distro-template")?.let {
+                PackwizFilePath(
+                    it.toPath().parent ?: ui.showErrorAndExit("Invalid pack file path: $packFileRaw"),
+                    it.toPath().name,
+                )
+            }
+        val distroFile =
+            ui.wrap("Invalid distro file path") {
+                packFolder / (cmd.getOptionValue("distro-file") ?: "distro.json")
+            }
+        val distroBaseUrl =
+            cmd.getOptionValue("distro-base-url")?.let {
+                ui.wrap("Invalid distro base URL") { HttpUrlPath(it.toHttpUrl()) }
+            }
+        val neoforgeInstaller =
+            cmd.getOptionValue("neoforge-installer")?.let {
+                ui.wrap("Invalid neoforge installer path") {
+                    PackwizFilePath(
+                        it.toPath().parent ?: ui.showErrorAndExit("Invalid neoforge installer path: $it"),
+                        it.toPath().name,
+                    )
+                }
+            }
+        val neoforgeVersion = cmd.getOptionValue("neoforge-version")
 
-		// Start update process!
-		try {
-			UpdateManager(UpdateManager.Options(packFile, manifestFile, packFolder, multimcFolder, side, timeout,
-				distroTemplateFile, distroFile, distroBaseUrl), ui)
-		} catch (e: Exception) {
-			ui.showErrorAndExit("Update process failed", e)
-		}
-		println("Finished successfully!")
-		ui.dispose()
-	}
+        // Start update process!
+        UpdateManager(
+            UpdateManager.Options(
+                packFile,
+                manifestFile,
+                packFolder,
+                multimcFolder,
+                side,
+                timeout,
+                distroTemplateFile,
+                distroFile,
+                distroBaseUrl,
+                neoforgeInstaller,
+                neoforgeVersion,
+            ),
+            ui,
+        )
+        println("Finished successfully!")
+        ui.dispose()
+    }
 
-	companion object {
-		// Called by packwiz-installer-bootstrap to set up the help command
-		@JvmStatic
-		fun addNonBootstrapOptions(options: Options) {
-			options.addOption("s", "side", true, "Side to install mods from (client/server, defaults to client)")
-			options.addOption(null, "title", true, "Title of the installer window")
-			options.addOption(null, "pack-folder", true, "Folder to install the pack to (defaults to the JAR directory)")
-			options.addOption(null, "multimc-folder", true, "The MultiMC pack folder (defaults to the parent of the pack directory)")
-			options.addOption(null, "meta-file", true, "JSON file to store pack metadata, relative to the pack folder (defaults to packwiz.json)")
-			options.addOption("t", "timeout", true, "Seconds to wait before automatically launching when asking about optional mods (defaults to 10)")
-			options.addOption(null, "distro-template", true, "JSON file to use as a template for the packwiz-generated distro file")
-			options.addOption(null, "distro-file", true, "JSON file to store the packwiz-generated distro file, relative to the pack folder (defaults to distro.json)")
-			options.addOption(null, "distro-base-url", true, "Base URL which distro module paths will be concatenated to")
-		}
+    companion object {
+        // Called by packwiz-installer-bootstrap to set up the help command
+        @JvmStatic
+        fun addNonBootstrapOptions(options: Options) {
+            options.addOption("s", "side", true, "Side to install mods from (client/server, defaults to client)")
+            options.addOption(null, "title", true, "Title of the installer window")
+            options.addOption(null, "pack-folder", true, "Folder to install the pack to (defaults to the JAR directory)")
+            options.addOption(null, "multimc-folder", true, "The MultiMC pack folder (defaults to the parent of the pack directory)")
+            options.addOption(
+                null,
+                "meta-file",
+                true,
+                "JSON file to store pack metadata, relative to the pack folder (defaults to packwiz.json)",
+            )
+            options.addOption(
+                "t",
+                "timeout",
+                true,
+                "Seconds to wait before automatically launching when asking about optional mods (defaults to 10)",
+            )
+            options.addOption(null, "distro-template", true, "JSON file to use as a template for the packwiz-generated distro file")
+            options.addOption(
+                null,
+                "distro-file",
+                true,
+                "JSON file to store the packwiz-generated distro file, relative to the pack folder (defaults to distro.json)",
+            )
+            options.addOption(null, "distro-base-url", true, "Base URL which distro module paths will be concatenated to")
+            options.addOption(null, "neoforge-installer", true, "Path to the NeoForge installer JAR file")
+            options.addOption(null, "neoforge-version", true, "NeoForge version to use (defaults to 21.1.191)")
+        }
 
-		// TODO: link these somehow so they're only defined once?
-		@JvmStatic
-		private fun addBootstrapOptions(options: Options) {
-			options.addOption(null, "bootstrap-update-url", true, "Github API URL for checking for updates")
-			options.addOption(null, "bootstrap-update-token", true, "Github API Access Token, for private repositories")
-			options.addOption(null, "bootstrap-no-update", false, "Don't update packwiz-installer")
-			options.addOption(null, "bootstrap-main-jar", true, "Location of the packwiz-installer JAR file")
-			options.addOption("g", "no-gui", false, "Don't display a GUI to show update progress")
-			options.addOption("h", "help", false, "Display this message") // Implemented in packwiz-installer-bootstrap!
-		}
+        // TODO: link these somehow so they're only defined once?
+        @JvmStatic
+        private fun addBootstrapOptions(options: Options) {
+            options.addOption(null, "bootstrap-update-url", true, "Github API URL for checking for updates")
+            options.addOption(null, "bootstrap-update-token", true, "Github API Access Token, for private repositories")
+            options.addOption(null, "bootstrap-no-update", false, "Don't update packwiz-installer")
+            options.addOption(null, "bootstrap-main-jar", true, "Location of the packwiz-installer JAR file")
+            options.addOption("g", "no-gui", false, "Don't display a GUI to show update progress")
+            options.addOption("h", "help", false, "Display this message") // Implemented in packwiz-installer-bootstrap!
+        }
 
-		@JvmStatic
-		fun main(args: Array<String>) {
-			Log.info("packwiz-installer was started without packwiz-installer-bootstrap. Use the bootstrapper for automatic updates! (Disregard this message if you have your own update mechanism)")
-			Main(args)
-		}
-	}
+        @JvmStatic
+        fun main(args: Array<String>) {
+            Log.info(
+                "packwiz-installer was started without packwiz-installer-bootstrap. Use the bootstrapper for automatic updates! (Disregard this message if you have your own update mechanism)",
+            )
+            Main(args)
+        }
+    }
 
-	// Actual main() is in RequiresBootstrap!
-	init {
-		// Big overarching try/catch just in case everything breaks
-		try {
-			startup(args)
-		} catch (e: Exception) {
-			Log.fatal("Error from main", e)
-			if (guiEnabled) {
-				EventQueue.invokeLater {
-					JOptionPane.showMessageDialog(null,
-						"A fatal error occurred: \n$e",
-						"packwiz-installer", JOptionPane.ERROR_MESSAGE)
-					exitProcess(1)
-				}
-				// In case the EventQueue is broken, exit after 1 minute
-				Thread.sleep(60 * 1000.toLong())
-			}
-			exitProcess(1)
-		}
-	}
+    // Actual main() is in RequiresBootstrap!
+    init {
+        // Big overarching try/catch just in case everything breaks
+        try {
+            startup(args)
+        } catch (e: Exception) {
+            Log.fatal("Error from main", e)
+            if (guiEnabled) {
+                EventQueue.invokeLater {
+                    JOptionPane.showMessageDialog(
+                        null,
+                        "A fatal error occurred: \n$e",
+                        "packwiz-installer",
+                        JOptionPane.ERROR_MESSAGE,
+                    )
+                    exitProcess(1)
+                }
+                // In case the EventQueue is broken, exit after 1 minute
+                Thread.sleep(60 * 1000.toLong())
+            }
+            exitProcess(1)
+        }
+    }
 }

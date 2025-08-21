@@ -24,13 +24,22 @@ data class DistroFile(
             var type: ModuleType,
             var classpath: Boolean?,
             var artifact: Artifact,
-            var subModules: List<Module>?,
+            var subModules: MutableList<Module>?,
         ) {
-            enum class ModuleType(val value: String) {
+            enum class ModuleType(
+                val value: String,
+            ) {
                 @SerializedName("File")
                 FILE("File"),
+
                 @SerializedName("Library")
-                LIBRARY("Library")
+                LIBRARY("Library"),
+
+                @SerializedName("ForgeHosted")
+                FORGE_HOSTED("ForgeHosted"),
+
+                @SerializedName("VersionManifest")
+                VERSION_MANIFEST("VersionManifest"),
             }
 
             data class Artifact(
@@ -38,7 +47,7 @@ data class DistroFile(
                 var url: String,
                 var MD5: String,
                 var path: String?,
-            ) {}
+            )
         }
     }
 }
