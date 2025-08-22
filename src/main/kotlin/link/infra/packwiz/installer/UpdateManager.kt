@@ -11,6 +11,7 @@ import link.infra.packwiz.installer.metadata.DownloadMode
 import link.infra.packwiz.installer.metadata.IndexFile
 import link.infra.packwiz.installer.metadata.ManifestFile
 import link.infra.packwiz.installer.metadata.PackFile
+import link.infra.packwiz.installer.metadata.VersionManifestFile
 import link.infra.packwiz.installer.metadata.curseforge.resolveCfMetadata
 import link.infra.packwiz.installer.metadata.hash.Hash
 import link.infra.packwiz.installer.metadata.hash.HashFormat
@@ -40,6 +41,7 @@ import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
 import kotlin.io.path.name
 import kotlin.io.path.nameWithoutExtension
+import kotlin.jvm.java
 import kotlin.system.exitProcess
 
 class UpdateManager internal constructor(
@@ -254,8 +256,8 @@ class UpdateManager internal constructor(
             installNeoForge()
             ui.submitProgress(InstallProgress("Adding libraries and version manifest to distro..."))
             addNeoForgeLibrary(distro, clientHolder)
-            addLibraries(distro, clientHolder)
-            addVersionManifest(distro, clientHolder)
+            val versionManifest = addVersionManifest(distro, clientHolder, gson)
+            addLibraries(distro, versionManifest, clientHolder)
             saveDistroFile(distro, gson)
         }
     }
@@ -594,66 +596,11 @@ class UpdateManager internal constructor(
         )
     }
 
-    private fun addLibraries(
-        distro: DistroFile,
-        clientHolder: ClientHolder,
-    ) {
-        val submodules =
-            distro.servers[0]
-                .modules!!
-                .first { it -> it.type == DistroFile.Server.Module.ModuleType.FORGE_HOSTED }
-                .subModules!!
-        val librariesPath = opts.packFolder / "libraries"
-        Files.walk(librariesPath.nioPath).use { paths ->
-            paths
-                .filter { Files.isRegularFile(it) && it.toString().endsWith(".jar") }
-                .filter {
-                    !it.toString().contains("neoforge-${opts.neoforgeVersion}-universal.jar")
-                } // Exclude the main neoforge jar
-                .map { it -> PackwizFilePath(it.parent.toOkioPath(), it.name) }
-                .forEach { jarPath ->
-                    try {
-                        val jarName = jarPath.nioPath.nameWithoutExtension
-                        submodules.add(
-                            DistroFile.Server.Module(
-                                id = pathToMavenIdentifier(librariesPath.nioPath.relativize(jarPath.nioPath)),
-                                name = jarName,
-                                type = DistroFile.Server.Module.ModuleType.LIBRARY,
-                                classpath = null,
-                                artifact =
-                                    DistroFile.Server.Module.Artifact(
-                                        size = Files.size(jarPath.nioPath).toInt(),
-                                        url =
-                                            (
-                                                opts.distroBaseUrl!! /
-                                                    opts.packFolder.nioPath
-                                                        .relativize(jarPath.nioPath)
-                                                        .toString()
-                                                        .replace('\\', '/')
-                                            ).toString(),
-                                        MD5 =
-                                            HashFormat.MD5
-                                                .source(jarPath.source(clientHolder))
-                                                .use { hashingSource ->
-                                                    hashingSource.buffer().readByteString()
-                                                    hashingSource.hash.value.hex()
-                                                },
-                                        path = null,
-                                    ),
-                                subModules = null,
-                            ),
-                        )
-                    } catch (e: Exception) {
-                        Log.warn("Failed to process library jar: $jarPath", e)
-                    }
-                }
-        }
-    }
-
     private fun addVersionManifest(
         distro: DistroFile,
         clientHolder: ClientHolder,
-    ) {
+        gson: Gson,
+    ): VersionManifestFile {
         val submodules =
             distro.servers[0]
                 .modules!!
@@ -685,6 +632,51 @@ class UpdateManager internal constructor(
                 subModules = null,
             ),
         )
+
+        return try {
+            InputStreamReader(versionManifestFullPath.source(clientHolder).inputStream(), StandardCharsets.UTF_8)
+                .use { reader -> gson.fromJson(reader, VersionManifestFile::class.java) }
+        } catch (e: IOException) {
+            ui.showErrorAndExit("Failed to read distro template file, verify ${opts.distroTemplateFile}", e)
+        }
+    }
+
+    private fun addLibraries(
+        distro: DistroFile,
+        versionManifest: VersionManifestFile,
+        clientHolder: ClientHolder,
+    ) {
+        val submodules =
+            distro.servers[0]
+                .modules!!
+                .first { it -> it.type == DistroFile.Server.Module.ModuleType.FORGE_HOSTED }
+                .subModules!!
+
+        versionManifest.libraries.forEach { library ->
+            val libraryPath = opts.packFolder / "libraries/${library.downloads.artifact.path}"
+            submodules.add(
+                DistroFile.Server.Module(
+                    id = library.name,
+                    name = libraryPath.nioPath.nameWithoutExtension,
+                    type = DistroFile.Server.Module.ModuleType.LIBRARY,
+                    classpath = null,
+                    artifact =
+                        DistroFile.Server.Module.Artifact(
+                            size = library.downloads.artifact.size,
+                            url = (opts.distroBaseUrl!! / "libraries/${library.downloads.artifact.path}").toString(),
+                            MD5 =
+                                HashFormat.MD5
+                                    .source(libraryPath.source(clientHolder))
+                                    .use { hashingSource ->
+                                        hashingSource.buffer().readByteString()
+                                        hashingSource.hash.value.hex()
+                                    },
+                            path = null,
+                        ),
+                    subModules = null,
+                ),
+            )
+        }
     }
 
     private fun saveDistroFile(
